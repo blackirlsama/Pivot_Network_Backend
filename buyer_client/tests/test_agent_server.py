@@ -76,10 +76,11 @@ def test_buyer_dashboard_returns_local_sessions(monkeypatch) -> None:
 
 
 def test_buyer_run_code_creates_local_session(monkeypatch) -> None:
-    monkeypatch.setattr(
-        agent_server,
-        "create_runtime_session",
-        lambda **kwargs: {
+    captured: dict[str, object] = {}
+
+    def fake_create_runtime_session(**kwargs):
+        captured["kwargs"] = kwargs
+        return {
             "backend_url": kwargs["backend_url"],
             "buyer_email": kwargs["email"],
             "buyer_token": "buyer-token",
@@ -94,7 +95,12 @@ def test_buyer_run_code_creates_local_session(monkeypatch) -> None:
             "create_result": {"data": {"session_id": 7}},
             "redeem_result": {"data": {"status": "created"}},
             "auth": {},
-        },
+        }
+
+    monkeypatch.setattr(
+        agent_server,
+        "create_runtime_session",
+        fake_create_runtime_session,
     )
 
     client = TestClient(agent_server.app)
@@ -104,6 +110,7 @@ def test_buyer_run_code_creates_local_session(monkeypatch) -> None:
             "backend_url": "http://127.0.0.1:8011",
             "email": "buyer@example.com",
             "password": "super-secret-password",
+            "display_name": "Buyer Display",
             "seller_node_key": "node-001",
             "runtime_image": "python:3.12-alpine",
             "code_filename": "main.py",
@@ -115,13 +122,15 @@ def test_buyer_run_code_creates_local_session(monkeypatch) -> None:
     payload = response.json()
     assert payload["session"]["session_id"] == 7
     assert payload["session"]["seller_node_key"] == "node-001"
+    assert captured["kwargs"]["display_name"] == "Buyer Display"
 
 
 def test_buyer_start_shell_creates_local_shell_session(monkeypatch) -> None:
-    monkeypatch.setattr(
-        agent_server,
-        "start_shell_session",
-        lambda **kwargs: {
+    captured: dict[str, object] = {}
+
+    def fake_start_shell_session(**kwargs):
+        captured["kwargs"] = kwargs
+        return {
             "backend_url": kwargs["backend_url"],
             "buyer_email": kwargs["email"],
             "buyer_token": "buyer-token",
@@ -136,7 +145,12 @@ def test_buyer_start_shell_creates_local_shell_session(monkeypatch) -> None:
             "create_result": {"data": {"session_id": 8}},
             "redeem_result": {"data": {"status": "running"}},
             "auth": {},
-        },
+        }
+
+    monkeypatch.setattr(
+        agent_server,
+        "start_shell_session",
+        fake_start_shell_session,
     )
 
     client = TestClient(agent_server.app)
@@ -146,6 +160,7 @@ def test_buyer_start_shell_creates_local_shell_session(monkeypatch) -> None:
             "backend_url": "http://127.0.0.1:8011",
             "email": "buyer@example.com",
             "password": "super-secret-password",
+            "display_name": "Shell Buyer",
             "seller_node_key": "node-001",
             "runtime_image": "python:3.12-alpine",
         },
@@ -155,13 +170,15 @@ def test_buyer_start_shell_creates_local_shell_session(monkeypatch) -> None:
     payload = response.json()
     assert payload["session"]["session_id"] == 8
     assert payload["session"]["session_mode"] == "shell"
+    assert captured["kwargs"]["display_name"] == "Shell Buyer"
 
 
 def test_buyer_start_licensed_shell_creates_local_shell_session(monkeypatch) -> None:
-    monkeypatch.setattr(
-        agent_server,
-        "start_licensed_shell_session",
-        lambda **kwargs: {
+    captured: dict[str, object] = {}
+
+    def fake_start_licensed_shell_session(**kwargs):
+        captured["kwargs"] = kwargs
+        return {
             "backend_url": kwargs["backend_url"],
             "buyer_email": kwargs["email"],
             "buyer_token": "buyer-token",
@@ -179,7 +196,12 @@ def test_buyer_start_licensed_shell_creates_local_shell_session(monkeypatch) -> 
             "start_result": {"data": {"session_id": 18, "order_id": 21}},
             "redeem_result": {"data": {"status": "running", "network_mode": "wireguard"}},
             "auth": {},
-        },
+        }
+
+    monkeypatch.setattr(
+        agent_server,
+        "start_licensed_shell_session",
+        fake_start_licensed_shell_session,
     )
 
     client = TestClient(agent_server.app)
@@ -189,6 +211,7 @@ def test_buyer_start_licensed_shell_creates_local_shell_session(monkeypatch) -> 
             "backend_url": "http://127.0.0.1:8011",
             "email": "buyer@example.com",
             "password": "super-secret-password",
+            "display_name": "Licensed Buyer",
             "license_token": "license-token-abc",
         },
     )
@@ -199,6 +222,7 @@ def test_buyer_start_licensed_shell_creates_local_shell_session(monkeypatch) -> 
     assert payload["session"]["session_mode"] == "shell"
     assert payload["session"]["order_id"] == 21
     assert payload["session"]["source_type"] == "licensed_order"
+    assert captured["kwargs"]["display_name"] == "Licensed Buyer"
 
 
 def test_buyer_run_archive_endpoint(monkeypatch) -> None:
@@ -1026,6 +1050,7 @@ def test_buyer_dashboard_includes_codex_status(monkeypatch) -> None:
 
 
 def test_buyer_start_codex_job_endpoint(monkeypatch) -> None:
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         agent_server,
         "SESSION_STORE",
@@ -1069,7 +1094,8 @@ def test_buyer_start_codex_job_endpoint(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_server,
         "create_codex_job",
-        lambda **kwargs: {
+        lambda **kwargs: captured.update(kwargs)
+        or {
             "job_id": "job-123",
             "local_id": kwargs["local_id"],
             "workspace_path": kwargs["workspace_path"],
@@ -1095,6 +1121,8 @@ def test_buyer_start_codex_job_endpoint(monkeypatch) -> None:
     payload = response.json()
     assert payload["job"]["job_id"] == "job-123"
     assert payload["job"]["local_id"] == "local-1"
+    assert captured["backend_url"] == "http://127.0.0.1:8011"
+    assert captured["buyer_token"] == "buyer-token"
 
 
 def test_buyer_read_codex_job_endpoint(monkeypatch) -> None:

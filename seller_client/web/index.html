@@ -481,6 +481,47 @@
       white-space: pre-line;
     }
 
+    .notice {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+      display: grid;
+      gap: 8px;
+    }
+
+    .notice-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .notice-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .notice.error {
+      border-color: rgba(179, 63, 63, 0.24);
+      background: rgba(179, 63, 63, 0.08);
+    }
+
+    .notice.warning {
+      border-color: rgba(181, 107, 31, 0.22);
+      background: rgba(181, 107, 31, 0.08);
+    }
+
+    .notice.success {
+      border-color: rgba(34, 122, 84, 0.22);
+      background: rgba(34, 122, 84, 0.08);
+    }
+
+    .notice.info {
+      border-color: rgba(64, 109, 143, 0.22);
+      background: rgba(64, 109, 143, 0.08);
+    }
+
     @keyframes rise-in {
       from {
         opacity: 0;
@@ -651,6 +692,12 @@
               </div>
             </div>
             <div class="list-card">
+              <h3>Platform Offers</h3>
+              <div id="platform_offers" class="activity-list">
+                <div class="empty">Waiting for platform offer data.</div>
+              </div>
+            </div>
+            <div class="list-card">
               <h3>平台镜像</h3>
               <div id="platform_images" class="activity-list">
                 <div class="empty">还没有平台镜像数据。</div>
@@ -703,6 +750,9 @@
           <div class="button-row">
             <button class="button-secondary" onclick="configureRegistryTrust()">检查 Registry 连接</button>
             <button class="button-primary" onclick="runPushImage()">推送并上架镜像</button>
+          </div>
+          <div id="push_guidance" class="steps-list" style="margin-top:12px">
+            <div class="empty">Run a registry check or push an image, and this panel will explain which step failed and what to inspect next.</div>
           </div>
           <div class="footer-note" style="margin-top:12px">
             seller 上传镜像默认走 `https://pivotcompute.store/v2/`，也就是公开证书的 443 入口。镜像名仍然写成 `pivotcompute.store/<repo>:<tag>`，不要写 `https://` 或 `:443`；seller-Agent 这里只做 HTTPS 连通性检查，不再安装本地 CA。
@@ -787,34 +837,300 @@
       const pre = document.getElementById("output");
       pre.textContent = `=== ${title} ===\n${JSON.stringify(payload, null, 2)}`;
     }
+    
+    function renderNotice(rootId, notice, emptyText) {
+      const root = document.getElementById(rootId);
+      if (!root) return;
+      if (!notice) {
+        root.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
+        return;
+      }
+      const lines = (notice.lines || []).filter(Boolean);
+      root.innerHTML = `
+        <div class="notice ${escapeHtml(notice.status || "info")}">
+          <div class="notice-head">
+            <strong>${escapeHtml(notice.title || "Status")}</strong>
+            ${statusBadge(notice.status || "info")}
+          </div>
+          ${notice.detail ? `<div class="detail">${escapeHtml(notice.detail)}</div>` : ""}
+          ${lines.length ? `<div class="notice-list">${lines.map((line) => `<div class="detail">${escapeHtml(line)}</div>`).join("")}</div>` : ""}
+        </div>
+      `;
+    }
+
+    function buildErrorPayload(error) {
+      if (error?.response) {
+        return {
+          ok: false,
+          status: error.response.status,
+          ...error.response.data,
+        };
+      }
+      return { ok: false, error: String(error) };
+    }
+
+    function summarizeDetail(detail) {
+      const text = String(detail || "").replace(/\s+/g, " ").trim();
+      return text.length > 260 ? `${text.slice(0, 257)}...` : text;
+    }
+
+    function sellerDefaultNotice() {
+      return {
+        status: "info",
+        title: "Image push flow",
+        lines: [
+          "The seller flow tags the local image, pushes it to the registry, then reports it to the platform backend.",
+          "This panel will call out the exact broken step, so you do not have to guess whether the failure happened in Docker, Registry, or backend auto-publish.",
+        ],
+      };
+    }
+
+    function sellerPushNotice(operation) {
+      const result = operation?.result || {};
+      const pushWrapper = result.push_result || {};
+      const tagResult = pushWrapper.tag_result || {};
+      const pushResult = pushWrapper.push_result || {};
+      const reportResult = result.report_result || {};
+      const offerState = result.offer_state || {};
+      const platformEvents = Array.isArray(result.platform_events) ? result.platform_events : [];
+      const latestPlatformEvent = platformEvents[0] || null;
+      const offerSummary = offerState?.repository
+        ? `offer=${offerState.offer_status || "unknown"} / probe=${offerState.probe_status || "unknown"}${offerState.pricing_error ? ` / pricing_error=${offerState.pricing_error}` : ""}`
+        : "";
+      const remoteRef = result.remote_ref || pushWrapper.remote_ref || tagResult.remote_ref || "";
+      const pushText = [tagResult.error, tagResult.stderr, tagResult.stdout, pushResult.error, pushResult.stderr, pushResult.stdout]
+        .filter(Boolean)
+        .join("\n");
+      const reportText = [reportResult.error, reportResult.detail, reportResult.body]
+        .filter(Boolean)
+        .join("\n");
+
+      if (result.ok && offerState.offer_status && offerState.offer_status !== "active") {
+        const lines = [
+          remoteRef ? `Remote image: ${remoteRef}` : "The remote image ref exists, but the offer is not buyer-visible yet.",
+          "Docker push and backend report both returned, but the platform offer is still not `active`.",
+        ];
+        if (offerSummary) {
+          lines.push(`Platform offer state: ${offerSummary}`);
+        }
+        if (latestPlatformEvent?.summary) {
+          lines.push(`Latest platform event: ${latestPlatformEvent.event_type || "unknown"} | ${latestPlatformEvent.summary}`);
+        }
+        return {
+          status: "warning",
+          title: "Image was reported, but the offer is not active yet",
+          lines,
+        };
+      }
+
+      if (result.ok) {
+        return {
+          status: "success",
+          title: "Image push and platform publish succeeded",
+          lines: [
+            remoteRef ? `Remote image: ${remoteRef}` : "The remote image ref was created successfully.",
+            "The registry push succeeded and the platform accepted the report.",
+          ],
+        };
+      }
+
+      if (result.error === "missing_node_registration_token" || reportResult.error === "missing_node_registration_token") {
+        return {
+          status: "error",
+          title: "Seller onboarding is incomplete",
+          detail: "missing_node_registration_token",
+          lines: [
+            "Run seller onboarding first so the local state includes a node registration token.",
+            "After onboarding succeeds, retry the same image push without rebuilding the image.",
+          ],
+        };
+      }
+
+      if (tagResult && tagResult.ok === false) {
+        return {
+          status: "error",
+          title: "Docker could not retag the local image",
+          detail: summarizeDetail(tagResult.stderr || tagResult.stdout || tagResult.error || tagResult.detail),
+          lines: [
+            `Local Tag must exist before push: ${valueOf("local_tag") || "(empty)"}.`,
+            remoteRef ? `Expected remote ref: ${remoteRef}` : "The seller console never finished creating a remote image ref.",
+          ],
+        };
+      }
+
+      if (result.stage === "push") {
+        const lines = [remoteRef ? `Target registry ref: ${remoteRef}` : "The push failed before a complete remote ref was available."];
+        if (/denied|unauthorized/i.test(pushText)) {
+          lines.push("Registry rejected the push. Check the repository name and the seller's permission or login state.");
+        } else if (/tls|certificate|x509/i.test(pushText)) {
+          lines.push("Registry TLS or certificate trust failed. Run the registry check first and verify `/v2/` is reachable.");
+        } else if (/connection refused|timed out|i\\/o timeout|no such host/i.test(pushText)) {
+          lines.push("The seller machine could not reach the registry endpoint. Check DNS, port, and current network access.");
+        } else {
+          lines.push("Docker push failed before the backend report step. Check the raw Docker output below.");
+        }
+        if (pushText) {
+          lines.push(summarizeDetail(pushText));
+        }
+        return {
+          status: "error",
+          title: "Registry push failed",
+          lines,
+        };
+      }
+
+      if (result.stage === "report") {
+        const lines = [
+          remoteRef ? `Registry already received ${remoteRef}.` : "The registry push finished before the backend failed.",
+          "This failure happened during platform registration or auto-publish, so you usually do not need to rebuild the local image.",
+        ];
+        if (reportResult.url) {
+          lines.push(`Backend endpoint: ${reportResult.url}`);
+        }
+        if (reportResult.status) {
+          lines.push(`Backend returned HTTP ${reportResult.status}.`);
+        }
+        if (offerSummary) {
+          lines.push(`Platform offer state: ${offerSummary}`);
+        }
+        if (latestPlatformEvent?.summary) {
+          lines.push(`Latest platform event: ${latestPlatformEvent.event_type || "unknown"} | ${latestPlatformEvent.summary}`);
+        }
+        if (/internal server error/i.test(reportText)) {
+          lines.push("The backend returned 500. Check platform backend logs and `/api/v1/platform/images/report`.");
+        } else if (/offset-naive|offset-aware|datetime/i.test(reportText)) {
+          lines.push("The backend hit a datetime handling bug during auto-pricing, not a Docker push problem.");
+        } else if (/timed out/i.test(reportText)) {
+          lines.push("The backend request timed out. Confirm the platform backend is still listening and responsive.");
+        } else if (/connection refused/i.test(reportText)) {
+          lines.push("The platform backend did not accept the connection. Restart or verify the backend before retrying.");
+        }
+        if (reportText) {
+          lines.push(summarizeDetail(reportText));
+        }
+        return {
+          status: "error",
+          title: "Platform registration or auto-publish failed",
+          lines,
+        };
+      }
+
+      return {
+        status: "error",
+        title: "Seller push flow failed",
+        detail: summarizeDetail(operation?.summary || result.error || ""),
+        lines: [
+          "Check the latest stage cards below to see whether Docker push or backend report broke first.",
+          "The raw response panel includes the full structured payload from the seller agent.",
+        ],
+      };
+    }
+
+    function sellerRegistryNotice(operation) {
+      const result = operation?.result || {};
+      const certificateResult = result.certificate_result || {};
+      const probeResult = result.registry_probe_result || {};
+      const lines = [];
+
+      if (result.ok) {
+        return {
+          status: "success",
+          title: "Registry HTTPS check passed",
+          lines: [
+            `Registry: ${result.registry || valueOf("registry") || "-"}`,
+            "The seller console can now continue with Docker push and backend registration.",
+          ],
+        };
+      }
+
+      if (certificateResult.ok === false) {
+        lines.push("TLS certificate trust failed for the registry host.");
+      }
+      if (probeResult.ok === false) {
+        lines.push("The registry `/v2/` endpoint did not answer successfully.");
+      }
+      if (!lines.length) {
+        lines.push("Registry connectivity check did not finish cleanly.");
+      }
+      const detail = summarizeDetail(
+        certificateResult.error
+          || certificateResult.body
+          || probeResult.error
+          || probeResult.body
+          || result.error
+          || operation?.summary
+      );
+      return {
+        status: "error",
+        title: "Registry check failed",
+        detail,
+        lines,
+      };
+    }
+
+    function sellerOperationNotice(operation) {
+      if (!operation) {
+        return sellerDefaultNotice();
+      }
+      if (operation.action === "push_image") {
+        return sellerPushNotice(operation);
+      }
+      if (operation.action === "registry_trust") {
+        return sellerRegistryNotice(operation);
+      }
+      return sellerDefaultNotice();
+    }
+
+    function renderPushGuidance(operation = state.latestOperation) {
+      renderNotice(
+        "push_guidance",
+        sellerOperationNotice(operation),
+        "Run a registry check or push an image, and this panel will explain which step failed and what to inspect next.",
+      );
+    }
+
+    function handleSellerError(title, error) {
+      const payload = buildErrorPayload(error);
+      setOutput(`${title} failed`, payload);
+      renderPushGuidance({
+        action: title === "registry check" ? "registry_trust" : "push_image",
+        status: "error",
+        title: `${title} failed`,
+        summary: payload.detail || payload.error || payload.raw || "",
+        result: payload,
+      });
+      return null;
+    }
 
     async function fetchJson(url, options = {}) {
       const response = await fetch(url, options);
-      const data = await response.json();
+      const text = await response.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { raw: text };
+      }
       if (!response.ok) {
-        throw new Error(JSON.stringify(data));
+        const error = new Error(String(data?.detail || data?.error || data?.raw || `HTTP ${response.status}`));
+        error.response = { status: response.status, data, url };
+        throw error;
       }
       return data;
     }
 
     async function postJson(url, payload, title) {
-      try {
-        const data = await fetchJson(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        setOutput(title, data);
-        if (data.stages) {
-          renderOperation(data);
-        }
-        await loadDashboard(false);
-        return data;
-      } catch (error) {
-        const message = { ok: false, error: String(error) };
-        setOutput(`${title} failed`, message);
-        throw error;
+      const data = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setOutput(title, data);
+      if (data.stages) {
+        renderOperation(data);
       }
+      await loadDashboard(false);
+      return data;
     }
 
     function renderSummary(summary) {
@@ -841,6 +1157,7 @@
       const root = document.getElementById("readiness_grid");
       if (!items || !items.length) {
         root.innerHTML = `<div class="empty">还没有本地检查项。</div>`;
+        renderPushGuidance();
         return;
       }
       root.innerHTML = items.map((item) => `
@@ -913,6 +1230,7 @@
           ${renderStages(operation.stages)}
         </div>
       `;
+      renderPushGuidance(operation);
     }
 
     function renderPlatformList(rootId, items, formatter, emptyText) {
@@ -949,6 +1267,27 @@
           <div class="meta">${escapeHtml(image.digest || image.source_image || "还没有 digest")}</div>
         </div>
       `, "平台侧还没有镜像记录。");
+
+      renderPlatformList("platform_offers", platform?.image_offers, (offer) => `
+        <div class="activity-item">
+          <div class="item-head">
+            <strong>${escapeHtml(offer.repository || "-")}:${escapeHtml(offer.tag || "-")}</strong>
+            ${statusBadge(
+              offer.offer_status === "active"
+                ? "success"
+                : offer.offer_status === "probing"
+                ? "warning"
+                : "error"
+            )}
+          </div>
+          <div class="detail">
+            offer=${escapeHtml(offer.offer_status || "unknown")}
+            · probe=${escapeHtml(offer.probe_status || "unknown")}
+            ${offer.current_billable_price_cny_per_hour != null ? `· ¥/h ${escapeHtml(offer.current_billable_price_cny_per_hour)}` : ""}
+          </div>
+          <div class="meta">${escapeHtml(offer.pricing_error || offer.runtime_image_ref || "")}</div>
+        </div>
+      `, "No platform offers yet.");
 
       const remoteSwarmItems = [];
       if (swarm?.swarm) {
@@ -1032,7 +1371,9 @@
 
       if (!state.latestOperation && items[0]?.stages) {
         renderOperation(items[0]);
+        return;
       }
+      renderPushGuidance(state.latestOperation);
     }
 
     async function loadDashboard(updateOutput = true) {
@@ -1045,75 +1386,108 @@
       renderLocalSnapshot(data.local || {}, data.platform || {});
       renderRegistryCatalog(data.local || {});
       renderLocalActivity(data.local_activity || []);
+      renderPushGuidance(state.latestOperation);
       if (updateOutput) {
         setOutput("dashboard", data);
       }
     }
 
     async function runIntentPreview() {
-      const data = await postJson("/api/intents/explain", {
-        intent: valueOf("intent"),
-        state_dir: valueOf("state_dir"),
-      }, "intent preview");
-      renderIntentPreview(data);
+      try {
+        const data = await postJson("/api/intents/explain", {
+          intent: valueOf("intent"),
+          state_dir: valueOf("state_dir"),
+        }, "intent preview");
+        renderIntentPreview(data);
+      } catch (error) {
+        handleSellerError("intent preview", error);
+      }
     }
 
     async function runInstaller() {
-      await postJson("/api/installer", {
-        apply: false,
-        state_dir: valueOf("state_dir"),
-      }, "installer");
+      try {
+        await postJson("/api/installer", {
+          apply: false,
+          state_dir: valueOf("state_dir"),
+        }, "installer");
+      } catch (error) {
+        handleSellerError("installer", error);
+      }
     }
 
     async function runCodexRuntime() {
-      await postJson("/api/runtime/codex", {
-        backend_url: valueOf("backend_url"),
-        state_dir: valueOf("state_dir"),
-      }, "codex runtime");
+      try {
+        await postJson("/api/runtime/codex", {
+          backend_url: valueOf("backend_url"),
+          state_dir: valueOf("state_dir"),
+        }, "codex runtime");
+      } catch (error) {
+        handleSellerError("codex runtime", error);
+      }
     }
 
     async function runWireGuardBootstrap() {
-      await postJson("/api/wireguard/bootstrap", {
-        backend_url: valueOf("backend_url"),
-        state_dir: valueOf("state_dir"),
-      }, "wireguard bootstrap");
+      try {
+        await postJson("/api/wireguard/bootstrap", {
+          backend_url: valueOf("backend_url"),
+          state_dir: valueOf("state_dir"),
+        }, "wireguard bootstrap");
+      } catch (error) {
+        handleSellerError("wireguard bootstrap", error);
+      }
     }
 
     async function runSwarmEnsureJoined() {
-      await postJson("/api/swarm/ensure-joined", {
-        backend_url: valueOf("backend_url"),
-        state_dir: valueOf("state_dir"),
-      }, "swarm ensure joined");
+      try {
+        await postJson("/api/swarm/ensure-joined", {
+          backend_url: valueOf("backend_url"),
+          state_dir: valueOf("state_dir"),
+        }, "swarm ensure joined");
+      } catch (error) {
+        handleSellerError("swarm ensure joined", error);
+      }
     }
 
     async function runOnboarding() {
-      await postJson("/api/onboarding", {
-        email: valueOf("email"),
-        password: valueOf("password"),
-        display_name: valueOf("display_name"),
-        backend_url: valueOf("backend_url"),
-        intent: valueOf("intent"),
-        state_dir: valueOf("state_dir"),
-      }, "onboarding");
+      try {
+        await postJson("/api/onboarding", {
+          email: valueOf("email"),
+          password: valueOf("password"),
+          display_name: valueOf("display_name"),
+          backend_url: valueOf("backend_url"),
+          intent: valueOf("intent"),
+          state_dir: valueOf("state_dir"),
+        }, "onboarding");
+      } catch (error) {
+        handleSellerError("onboarding", error);
+      }
     }
 
     async function configureRegistryTrust() {
-      await postJson("/api/registry/trust", {
-        registry: valueOf("registry"),
-        restart_docker: true,
-        state_dir: valueOf("state_dir"),
-      }, "registry check");
+      try {
+        await postJson("/api/registry/trust", {
+          registry: valueOf("registry"),
+          restart_docker: true,
+          state_dir: valueOf("state_dir"),
+        }, "registry check");
+      } catch (error) {
+        handleSellerError("registry check", error);
+      }
     }
 
     async function runPushImage() {
-      await postJson("/api/images/push", {
-        local_tag: valueOf("local_tag"),
-        repository: valueOf("repository"),
-        remote_tag: valueOf("remote_tag"),
-        registry: valueOf("registry"),
-        backend_url: valueOf("backend_url"),
-        state_dir: valueOf("state_dir"),
-      }, "push image");
+      try {
+        await postJson("/api/images/push", {
+          local_tag: valueOf("local_tag"),
+          repository: valueOf("repository"),
+          remote_tag: valueOf("remote_tag"),
+          registry: valueOf("registry"),
+          backend_url: valueOf("backend_url"),
+          state_dir: valueOf("state_dir"),
+        }, "push image");
+      } catch (error) {
+        handleSellerError("push image", error);
+      }
     }
 
     function focusIntent() {

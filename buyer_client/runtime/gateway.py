@@ -92,6 +92,15 @@ def request_gateway_json(
     }
 
 
+def _gateway_failure_detail(prefix: str, data: Any) -> str:
+    if isinstance(data, dict):
+        for key in ("detail", "error", "raw"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return f"{prefix}: {data}"
+
+
 def gateway_exec_command(
     *,
     gateway_host: str,
@@ -112,7 +121,7 @@ def gateway_exec_command(
         timeout=timeout,
     )
     if not response["ok"]:
-        raise RuntimeError(f"gateway_exec_failed: {response['data']}")
+        raise RuntimeError(_gateway_failure_detail("gateway_exec_failed", response["data"]))
     return response["data"]
 
 
@@ -137,7 +146,7 @@ def gateway_read_logs(
         timeout=timeout,
     )
     if not response["ok"]:
-        raise RuntimeError(f"gateway_logs_failed: {response['data']}")
+        raise RuntimeError(_gateway_failure_detail("gateway_logs_failed", response["data"]))
     return response["data"]
 
 
@@ -162,7 +171,7 @@ def gateway_upload_archive(
         timeout=timeout,
     )
     if not response["ok"]:
-        raise RuntimeError(f"gateway_upload_failed: {response['data']}")
+        raise RuntimeError(_gateway_failure_detail("gateway_upload_failed", response["data"]))
     return response["data"]
 
 
@@ -186,5 +195,5 @@ def gateway_download_archive(
         timeout=timeout,
     )
     if not response["ok"]:
-        raise RuntimeError(f"gateway_download_failed: {response['data']}")
+        raise RuntimeError(_gateway_failure_detail("gateway_download_failed", response["data"]))
     return response["data"]

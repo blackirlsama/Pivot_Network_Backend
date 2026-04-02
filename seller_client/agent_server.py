@@ -98,6 +98,108 @@ def _parse_json_body(body: str | None) -> Any:
         return body
 
 
+def _platform_request(
+    state_dir: str,
+    path: str,
+    *,
+    backend_url: str | None = None,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: float = 20,
+) -> dict[str, Any]:
+    base_dir = _state_dir_path(state_dir)
+    config = _load_client_config(base_dir)
+    access_token = config.get("auth", {}).get("access_token") or ""
+    resolved_backend_url = _backend_url(backend_url, base_dir)
+    if not access_token:
+        return {
+            "ok": False,
+            "error": "missing_access_token",
+            "backend_url": resolved_backend_url,
+            "path": path,
+        }
+
+    response = _run_backend_request(
+        method,
+        path,
+        backend_url=resolved_backend_url,
+        bearer_token=access_token,
+        payload=payload,
+        timeout_seconds=timeout_seconds,
+    )
+    response["data"] = _parse_json_body(response.get("body"))
+    return response
+
+
+def _matching_offer(offers: Any, repository: str, tag: str) -> dict[str, Any] | None:
+    if not isinstance(offers, list):
+        return None
+    candidates = [
+        item
+        for item in offers
+        if isinstance(item, dict) and item.get("repository") == repository and item.get("tag") == tag
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: int(item.get("id") or 0))
+
+
+def _matching_platform_events(events: Any, repository: str, tag: str) -> list[dict[str, Any]]:
+    if not isinstance(events, list):
+        return []
+
+    matched: list[dict[str, Any]] = []
+    image_ref = f"{repository}:{tag}"
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        metadata = event.get("event_metadata") or {}
+        summary = str(event.get("summary") or "")
+        if metadata.get("repository") == repository and metadata.get("tag") == tag:
+            matched.append(event)
+            continue
+        if image_ref in summary:
+            matched.append(event)
+    return matched[:5]
+
+
+def _offer_state_detail(offer: dict[str, Any]) -> str:
+    status = offer.get("offer_status") or "unknown"
+    probe_status = offer.get("probe_status") or "unknown"
+    pricing_error = offer.get("pricing_error")
+    price = offer.get("current_billable_price_cny_per_hour")
+    parts = [f"offer_status={status}", f"probe_status={probe_status}"]
+    if price is not None:
+        parts.append(f"price_cny_per_hour={price}")
+    if pricing_error:
+        parts.append(f"pricing_error={pricing_error}")
+    return " | ".join(parts)
+
+
+def _http_result_detail(result: dict[str, Any] | None, fallback: str) -> str:
+    payload = result or {}
+    parsed_body = payload.get("data")
+    if parsed_body is None:
+        parsed_body = _parse_json_body(payload.get("body"))
+
+    message: Any = None
+    if isinstance(parsed_body, dict):
+        message = parsed_body.get("detail") or parsed_body.get("error") or parsed_body.get("message")
+    if message is None:
+        message = payload.get("detail") or payload.get("error") or payload.get("stderr") or payload.get("body")
+    if message is None:
+        message = fallback
+
+    prefix: list[str] = []
+    if payload.get("status") is not None:
+        prefix.append(f"HTTP {payload['status']}")
+    if payload.get("url"):
+        prefix.append(str(payload["url"]))
+    if prefix:
+        return f"{' | '.join(prefix)} | {message}"
+    return str(message)
+
+
 def _platform_snapshot(state_dir: str) -> dict[str, Any]:
     base_dir = _state_dir_path(state_dir)
     config = _load_client_config(base_dir)
@@ -109,38 +211,28 @@ def _platform_snapshot(state_dir: str) -> dict[str, Any]:
         "overview": None,
         "activity": None,
         "swarm": None,
+        "image_offers": None,
     }
     if not access_token:
         snapshot["error"] = "missing_access_token"
         return snapshot
 
-    overview = _run_backend_request(
-        "GET",
-        "/api/v1/platform/overview",
-        backend_url=backend_url,
-        bearer_token=access_token,
-    )
-    activity = _run_backend_request(
-        "GET",
-        "/api/v1/platform/activity",
-        backend_url=backend_url,
-        bearer_token=access_token,
-    )
-    swarm = _run_backend_request(
-        "GET",
-        "/api/v1/platform/swarm/overview",
-        backend_url=backend_url,
-        bearer_token=access_token,
-    )
-    snapshot["overview"] = _parse_json_body(overview.get("body"))
-    snapshot["activity"] = _parse_json_body(activity.get("body"))
-    snapshot["swarm"] = _parse_json_body(swarm.get("body"))
+    overview = _platform_request(state_dir, "/api/v1/platform/overview", backend_url=backend_url)
+    activity = _platform_request(state_dir, "/api/v1/platform/activity", backend_url=backend_url)
+    swarm = _platform_request(state_dir, "/api/v1/platform/swarm/overview", backend_url=backend_url)
+    image_offers = _platform_request(state_dir, "/api/v1/platform/image-offers", backend_url=backend_url)
+    snapshot["overview"] = overview.get("data")
+    snapshot["activity"] = activity.get("data")
+    snapshot["swarm"] = swarm.get("data")
+    snapshot["image_offers"] = image_offers.get("data")
     snapshot["ok"] = bool(overview.get("ok") and activity.get("ok"))
     if not snapshot["ok"]:
         snapshot["overview_error"] = overview if not overview.get("ok") else None
         snapshot["activity_error"] = activity if not activity.get("ok") else None
     if not swarm.get("ok"):
         snapshot["swarm_error"] = swarm
+    if not image_offers.get("ok"):
+        snapshot["image_offers_error"] = image_offers
     return snapshot
 
 
@@ -332,6 +424,7 @@ def _wireguard_bootstrap_stages(result: dict[str, Any]) -> list[dict[str, str]]:
                     str(activation_result.get("error") or activation_result.get("stderr") or "本地 profile 已准备，但隧道还没有成功激活。"),
                 )
             )
+
     return stages
 
 
@@ -522,7 +615,43 @@ def _registry_trust_stages(result: dict[str, Any], registry: str) -> list[dict[s
 def _push_image_stages(result: dict[str, Any], repository: str, remote_tag: str) -> list[dict[str, str]]:
     push_result = result.get("push_result", {})
     report_result = result.get("report_result", {})
+    offer_state = result.get("offer_state")
+    platform_events = result.get("platform_events") or []
     stages: list[dict[str, str]] = []
+
+    if report_result and not report_result.get("ok"):
+        stages.append(
+            _stage(
+                "report_error",
+                "HTTP Error Detail",
+                "error",
+                _http_result_detail(report_result, "Platform image report failed with an unknown backend error."),
+            )
+        )
+
+    if offer_state:
+        offer_status = str(offer_state.get("offer_status") or "")
+        stage_status = "success" if offer_status == "active" else "warning" if report_result.get("ok") else "error"
+        stages.append(
+            _stage(
+                "offer_state",
+                "Platform Offer State",
+                stage_status,
+                _offer_state_detail(offer_state),
+            )
+        )
+
+    if platform_events:
+        latest_event = platform_events[0]
+        stages.append(
+            _stage(
+                "platform_event",
+                "Latest Platform Event",
+                "info",
+                f"{latest_event.get('event_type') or 'unknown'} | {latest_event.get('summary') or ''}",
+            )
+        )
+
 
     tag_payload = push_result.get("tag_result")
     if tag_payload:
@@ -1000,6 +1129,18 @@ def run_push_image(payload: PushImageRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         state_dir=state_dir,
     )
+    offer_response = _platform_request(state_dir, "/api/v1/platform/image-offers", backend_url=payload.backend_url)
+    activity_response = _platform_request(state_dir, "/api/v1/platform/activity", backend_url=payload.backend_url)
+    result["offer_state"] = _matching_offer(offer_response.get("data"), payload.repository, payload.remote_tag)
+    result["platform_events"] = _matching_platform_events(
+        activity_response.get("data"),
+        payload.repository,
+        payload.remote_tag,
+    )
+    if not offer_response.get("ok"):
+        result["offer_lookup_error"] = offer_response
+    if not activity_response.get("ok"):
+        result["platform_activity_error"] = activity_response
     response = _operation_payload(
         state_dir=state_dir,
         action="push_image",

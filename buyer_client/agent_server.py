@@ -65,6 +65,7 @@ class RunCodeRequest(BaseModel):
     backend_url: str = "http://127.0.0.1:8000"
     email: str
     password: str
+    display_name: str | None = None
     seller_node_key: str
     runtime_image: str = "python:3.12-alpine"
     code_filename: str = "main.py"
@@ -77,6 +78,7 @@ class RunArchiveRequest(BaseModel):
     backend_url: str = "http://127.0.0.1:8000"
     email: str
     password: str
+    display_name: str | None = None
     seller_node_key: str
     source_path: str
     runtime_image: str = "python:3.12-alpine"
@@ -90,6 +92,7 @@ class RunGitHubRequest(BaseModel):
     backend_url: str = "http://127.0.0.1:8000"
     email: str
     password: str
+    display_name: str | None = None
     seller_node_key: str
     repo_url: str
     repo_ref: str = "main"
@@ -104,6 +107,7 @@ class StartShellRequest(BaseModel):
     backend_url: str = "http://127.0.0.1:8000"
     email: str
     password: str
+    display_name: str | None = None
     seller_node_key: str
     runtime_image: str = "python:3.12-alpine"
     requested_duration_minutes: int = Field(default=30, ge=1, le=720)
@@ -114,6 +118,7 @@ class StartLicensedShellRequest(BaseModel):
     backend_url: str = "http://127.0.0.1:8000"
     email: str
     password: str
+    display_name: str | None = None
     license_token: str = Field(min_length=8, max_length=512)
     state_dir: str | None = None
 
@@ -897,6 +902,7 @@ def run_code(payload: RunCodeRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         email=payload.email,
         password=payload.password,
+        display_name=payload.display_name,
         seller_node_key=payload.seller_node_key,
         code_filename=payload.code_filename,
         code_content=payload.code_content,
@@ -938,6 +944,7 @@ def run_archive_endpoint(payload: RunArchiveRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         email=payload.email,
         password=payload.password,
+        display_name=payload.display_name,
         seller_node_key=payload.seller_node_key,
         source_path=Path(payload.source_path),
         runtime_image=payload.runtime_image,
@@ -972,6 +979,7 @@ def run_github_endpoint(payload: RunGitHubRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         email=payload.email,
         password=payload.password,
+        display_name=payload.display_name,
         seller_node_key=payload.seller_node_key,
         repo_url=payload.repo_url,
         repo_ref=payload.repo_ref,
@@ -1007,6 +1015,7 @@ def start_shell(payload: StartShellRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         email=payload.email,
         password=payload.password,
+        display_name=payload.display_name,
         seller_node_key=payload.seller_node_key,
         runtime_image=payload.runtime_image,
         requested_duration_minutes=payload.requested_duration_minutes,
@@ -1046,6 +1055,7 @@ def start_licensed_shell(payload: StartLicensedShellRequest) -> JSONResponse:
         backend_url=payload.backend_url,
         email=payload.email,
         password=payload.password,
+        display_name=payload.display_name,
         license_token=payload.license_token,
     )
     local_id = uuid.uuid4().hex
@@ -1330,6 +1340,8 @@ def start_codex_job_endpoint(payload: CodexJobRequest) -> JSONResponse:
             user_prompt=payload.prompt,
             workspace_path=payload.workspace_path,
             state_dir=state_dir,
+            backend_url=record["backend_url"],
+            buyer_token=record["buyer_token"],
             buyer_server_url=buyer_server_url,
             session_context=session,
             model=payload.model,

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from buyer_client.runtime.api import fetch_codex_runtime_bootstrap as fetch_backend_codex_runtime_bootstrap
 from seller_client.installer import (
     buyer_codex_server_name,
     codex_config_path,
@@ -20,6 +21,72 @@ JOB_LOCK = threading.Lock()
 JOB_STORE: dict[str, dict[str, Any]] = {}
 DEFAULT_REMOTE_WORKSPACE = "/workspace"
 DEFAULT_LOG_TAIL_BYTES = 80_000
+_CODEX_RUNTIME_ENV_KEYS = {
+    "OPENAI_API_KEY",
+    "CODEX_AUTH_JSON_PATH",
+    "CODEX_MODEL_PROVIDER",
+    "CODEX_MODEL",
+    "CODEX_REVIEW_MODEL",
+    "CODEX_MODEL_REASONING_EFFORT",
+    "CODEX_DISABLE_RESPONSE_STORAGE",
+    "CODEX_NETWORK_ACCESS",
+    "CODEX_WINDOWS_WSL_SETUP_ACKNOWLEDGED",
+    "CODEX_MODEL_CONTEXT_WINDOW",
+    "CODEX_MODEL_AUTO_COMPACT_TOKEN_LIMIT",
+    "CODEX_PROVIDER_NAME",
+    "CODEX_PROVIDER_BASE_URL",
+    "CODEX_PROVIDER_WIRE_API",
+    "CODEX_PROVIDER_REQUIRES_OPENAI_AUTH",
+}
+
+
+def _env_bool(value: Any) -> str:
+    return "true" if bool(value) else "false"
+
+
+def _codex_runtime_env_overrides(runtime_bootstrap: dict[str, Any]) -> dict[str, str]:
+    auth = runtime_bootstrap.get("auth") or {}
+    provider = runtime_bootstrap.get("provider") or {}
+    api_key = str(auth.get("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("codex_runtime_bootstrap_missing_api_key")
+
+    return {
+        "OPENAI_API_KEY": api_key,
+        "CODEX_MODEL_PROVIDER": str(runtime_bootstrap.get("model_provider") or ""),
+        "CODEX_MODEL": str(runtime_bootstrap.get("model") or ""),
+        "CODEX_REVIEW_MODEL": str(runtime_bootstrap.get("review_model") or ""),
+        "CODEX_MODEL_REASONING_EFFORT": str(runtime_bootstrap.get("model_reasoning_effort") or ""),
+        "CODEX_DISABLE_RESPONSE_STORAGE": _env_bool(runtime_bootstrap.get("disable_response_storage")),
+        "CODEX_NETWORK_ACCESS": str(runtime_bootstrap.get("network_access") or ""),
+        "CODEX_WINDOWS_WSL_SETUP_ACKNOWLEDGED": _env_bool(runtime_bootstrap.get("windows_wsl_setup_acknowledged")),
+        "CODEX_MODEL_CONTEXT_WINDOW": str(runtime_bootstrap.get("model_context_window") or ""),
+        "CODEX_MODEL_AUTO_COMPACT_TOKEN_LIMIT": str(runtime_bootstrap.get("model_auto_compact_token_limit") or ""),
+        "CODEX_PROVIDER_NAME": str(provider.get("name") or ""),
+        "CODEX_PROVIDER_BASE_URL": str(provider.get("base_url") or ""),
+        "CODEX_PROVIDER_WIRE_API": str(provider.get("wire_api") or ""),
+        "CODEX_PROVIDER_REQUIRES_OPENAI_AUTH": _env_bool(provider.get("requires_openai_auth")),
+    }
+
+
+def _codex_process_env(
+    *,
+    buyer_server_url: str,
+    local_id: str,
+    state_dir: str,
+    runtime_bootstrap: dict[str, Any],
+) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if key not in _CODEX_RUNTIME_ENV_KEYS}
+    env.update(_codex_runtime_env_overrides(runtime_bootstrap))
+    env.update(
+        {
+            "PIVOT_BUYER_SERVER_URL": buyer_server_url,
+            "PIVOT_BUYER_DEFAULT_LOCAL_ID": local_id,
+            "PIVOT_BUYER_STATE_DIR": state_dir,
+            "PIVOT_BUYER_REMOTE_WORKSPACE": DEFAULT_REMOTE_WORKSPACE,
+        }
+    )
+    return env
 
 
 def _utc_now_iso() -> str:
@@ -295,6 +362,8 @@ def create_codex_job(
     user_prompt: str,
     workspace_path: str,
     state_dir: str,
+    backend_url: str,
+    buyer_token: str,
     buyer_server_url: str,
     session_context: dict[str, Any],
     model: str = "",
@@ -302,6 +371,10 @@ def create_codex_job(
     resolved_state_dir = str(Path(state_dir).expanduser().resolve())
     resolved_workspace = Path(workspace_path).expanduser().resolve()
     resolved_workspace.mkdir(parents=True, exist_ok=True)
+    runtime_bootstrap = fetch_backend_codex_runtime_bootstrap(
+        backend_url=backend_url,
+        buyer_token=buyer_token,
+    )
     job_id = uuid.uuid4().hex
     job_dir = _job_dir(resolved_state_dir, job_id)
     context_path = _write_workspace_context(
@@ -323,14 +396,11 @@ def create_codex_job(
         last_message_path=_last_message_path(job_dir),
         model=model.strip(),
     )
-    env = os.environ.copy()
-    env.update(
-        {
-            "PIVOT_BUYER_SERVER_URL": buyer_server_url,
-            "PIVOT_BUYER_DEFAULT_LOCAL_ID": local_id,
-            "PIVOT_BUYER_STATE_DIR": resolved_state_dir,
-            "PIVOT_BUYER_REMOTE_WORKSPACE": DEFAULT_REMOTE_WORKSPACE,
-        }
+    env = _codex_process_env(
+        buyer_server_url=buyer_server_url,
+        local_id=local_id,
+        state_dir=resolved_state_dir,
+        runtime_bootstrap=runtime_bootstrap,
     )
     process = subprocess.Popen(
         command,

@@ -238,6 +238,44 @@
       background: rgba(16, 39, 41, 0.08);
       word-break: break-all;
     }
+    .notice {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.68);
+      display: grid;
+      gap: 8px;
+    }
+    .notice-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .notice ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+    .notice li + li {
+      margin-top: 6px;
+    }
+    .notice.success {
+      border-color: rgba(36, 115, 79, 0.18);
+      background: rgba(36, 115, 79, 0.08);
+    }
+    .notice.warning {
+      border-color: rgba(161, 107, 36, 0.18);
+      background: rgba(161, 107, 36, 0.08);
+    }
+    .notice.error {
+      border-color: rgba(181, 69, 69, 0.2);
+      background: rgba(181, 69, 69, 0.08);
+    }
+    .notice.info {
+      border-color: rgba(13, 124, 118, 0.18);
+      background: rgba(13, 124, 118, 0.08);
+    }
     @media (max-width: 1020px) {
       .grid,
       .form-grid,
@@ -275,6 +313,10 @@
             <label>
               Buyer Email
               <input id="email" value="buyer-local@example.com" />
+            </label>
+            <label>
+              Display Name
+              <input id="display_name" value="Buyer Agent" placeholder="Shown on first shared-account registration" />
             </label>
             <label>
               Password
@@ -363,6 +405,9 @@ print(6 * 7)</textarea>
             <button class="secondary" onclick="openTerminal()">Open Terminal</button>
             <button class="secondary" onclick="closeTerminal()">Close Terminal</button>
             <button class="danger" onclick="stopActiveSession()">Stop Session</button>
+          </div>
+          <div id="gateway_notice" class="list" style="margin-top: 14px;">
+            <div class="empty">Select a session first, then this panel will explain whether upload and exec are ready.</div>
           </div>
         </section>
 
@@ -502,13 +547,292 @@ print(6 * 7)</textarea>
       if (["error", "failed", "stopped", "expired", "activation_failed"].includes(status)) return "error";
       return "info";
     }
+    function renderNotice(rootId, notice, emptyText) {
+      const root = $(rootId);
+      if (!root) return;
+      if (!notice) {
+        root.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
+        return;
+      }
+      const lines = (notice.lines || []).filter(Boolean);
+      root.innerHTML = `
+        <div class="notice ${statusClass(notice.status || "info")}">
+          <div class="notice-head">
+            <strong>${escapeHtml(notice.title || "Status")}</strong>
+            <span class="status ${statusClass(notice.status || "info")}">${escapeHtml(notice.status || "info")}</span>
+          </div>
+          ${notice.detail ? `<div class="muted">${escapeHtml(notice.detail)}</div>` : ""}
+          ${lines.length ? `<ul>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}
+        </div>
+      `;
+    }
     function setRaw(title, payload) {
       $("raw_output").textContent = `=== ${title} ===\n${JSON.stringify(payload, null, 2)}`;
     }
+    function buildErrorPayload(error) {
+      if (error?.response) {
+        return {
+          ok: false,
+          status: error.response.status,
+          ...error.response.data,
+        };
+      }
+      return { ok: false, error: String(error) };
+    }
+    function summarizeDetail(detail) {
+      const text = String(detail || "").replace(/\s+/g, " ").trim();
+      return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+    }
+    function extractKnownDetail(detail) {
+      const text = String(detail || "");
+      const knownPrefixes = [
+        "buyer_wireguard_not_active",
+        "session_gateway_not_connected",
+        "gateway_feature_not_available:",
+        "local_path_not_found",
+        "remote_path_missing",
+        "runtime_session_not_active",
+        "docker_cp_upload_failed:",
+        "docker_cp_download_failed:",
+        "docker_exec_mkdir_failed:",
+        "upload_archive_invalid_layout",
+        "gateway_target_missing",
+      ];
+      for (const prefix of knownPrefixes) {
+        const index = text.indexOf(prefix);
+        if (index >= 0) {
+          return text
+            .slice(index)
+            .replace(/['"}\]]+$/g, "")
+            .trim();
+        }
+      }
+      return text.trim();
+    }
+    function errorDetail(error) {
+      const payload = buildErrorPayload(error);
+      return extractKnownDetail(payload.detail || payload.error || payload.raw || "");
+    }
+    function remotePathLooksLikeFile(remotePath) {
+      const value = String(remotePath || "").trim();
+      if (!value || value === "/" || value.endsWith("/")) return false;
+      const lastSegment = value.split("/").filter(Boolean).pop() || "";
+      return lastSegment.includes(".");
+    }
+    function gatewayReadinessNotice(session = activeSession()) {
+      if (!session) {
+        return {
+          status: "info",
+          title: "Choose a buyer session",
+          lines: [
+            "Create or select a session first.",
+            "Upload, exec, terminal, and logs only work after a session is selected and connected.",
+          ],
+        };
+      }
+      if (["stopped", "expired", "failed"].includes(session.status)) {
+        return {
+          status: "error",
+          title: "This session is no longer active",
+          lines: [
+            `Current status: ${session.status}.`,
+            "Start a new session before uploading or opening the terminal again.",
+          ],
+        };
+      }
+      if (session.network_mode === "wireguard" && session.wireguard_status !== "active") {
+        const lines = [
+          "WireGuard is not active on this buyer machine yet.",
+          "Run Prepare Helper or `environment_check/install_windows.ps1 -Apply`, then click Connect Gateway again.",
+        ];
+        if (session.wireguard_helper_apply_command) {
+          lines.push(`Helper command: ${session.wireguard_helper_apply_command}`);
+        }
+        return {
+          status: "error",
+          title: "WireGuard is blocking upload and exec",
+          detail: "The gateway handshake may exist, but the session is not fully connected.",
+          lines,
+        };
+      }
+      if (session.connection_status !== "connected") {
+        return {
+          status: "warning",
+          title: "Connect Gateway before uploading",
+          lines: [
+            `Current connection status: ${session.connection_status || "pending"}.`,
+            "Wait until Active Session shows `connection_status=connected`, then retry upload, exec, or terminal.",
+          ],
+        };
+      }
+      if ((session.gateway_supported_features || []).length && !(session.gateway_supported_features || []).includes("files")) {
+        return {
+          status: "error",
+          title: "This seller gateway does not support file transfer",
+          lines: [
+            `Gateway features: ${(session.gateway_supported_features || []).join(", ") || "-"}.`,
+            "Upload and download need the `files` capability on the seller gateway.",
+          ],
+        };
+      }
+      if (remotePathLooksLikeFile(valueOf("upload_remote_path"))) {
+        return {
+          status: "warning",
+          title: "Upload Remote Dir is treated as a directory",
+          lines: [
+            "If you enter `/workspace/script.py`, the file lands under `/workspace/script.py/<local-file-name>`.",
+            "Use `/workspace` when you want the file to appear directly in `/workspace`.",
+          ],
+        };
+      }
+      return {
+        status: "success",
+        title: "Gateway is ready for upload and exec",
+        lines: [
+          "Session is connected and the seller gateway advertises `files` support.",
+          "For a normal single-file upload, keep Upload Remote Dir as `/workspace`.",
+        ],
+      };
+    }
+    function buyerActionNotice(error, action) {
+      const detail = errorDetail(error);
+      const localPath = valueOf("upload_local_path");
+      const remotePath = valueOf("upload_remote_path") || "/workspace";
+      if (detail === "buyer_wireguard_not_active") {
+        const session = activeSession();
+        const lines = [
+          "Buyer-side WireGuard did not become active, so the gateway never reached a fully connected state.",
+          "Run Prepare Helper or `environment_check/install_windows.ps1 -Apply`, then reconnect the session.",
+        ];
+        if (session?.wireguard_helper_apply_command) {
+          lines.push(`Helper command: ${session.wireguard_helper_apply_command}`);
+        }
+        return { status: "error", title: "WireGuard is not active", detail, lines };
+      }
+      if (detail === "session_gateway_not_connected") {
+        return {
+          status: "error",
+          title: "Gateway is not connected yet",
+          detail,
+          lines: [
+            "Click Connect Gateway first.",
+            "Wait for `connection_status=connected` before upload, exec, logs, or terminal.",
+          ],
+        };
+      }
+      if (detail.startsWith("gateway_feature_not_available:")) {
+        return {
+          status: "error",
+          title: "Seller gateway is missing the required feature",
+          detail,
+          lines: [
+            `This action needs ${detail.split(":").slice(1).join(":") || "the requested"} support from the seller gateway.`,
+            "Update or restart the seller gateway if it is running an older capability set.",
+          ],
+        };
+      }
+      if (detail === "local_path_not_found") {
+        return {
+          status: "error",
+          title: "Upload Local Path was not found",
+          detail,
+          lines: [
+            `The buyer machine cannot find: ${localPath || "(empty path)"}.`,
+            "Pick a real local file or directory before uploading.",
+          ],
+        };
+      }
+      if (detail === "remote_path_missing") {
+        return {
+          status: "error",
+          title: "Remote path is required",
+          detail,
+          lines: [
+            "Fill in Upload Remote Dir before retrying.",
+            "Use `/workspace` for the normal product path.",
+          ],
+        };
+      }
+      if (detail.startsWith("docker_exec_mkdir_failed:")) {
+        return {
+          status: "error",
+          title: "The runtime could not create the target directory",
+          detail,
+          lines: [
+            `The seller gateway tried to prepare ${remotePath}.`,
+            "Upload Remote Dir must be a directory path such as `/workspace`.",
+          ],
+        };
+      }
+      if (detail.startsWith("docker_cp_upload_failed:")) {
+        return {
+          status: "error",
+          title: action === "download" ? "Container download failed" : "Container upload failed",
+          detail,
+          lines: [
+            "The seller gateway called `docker cp`, but the runtime container rejected the transfer.",
+            "Most common fixes: reconnect the session, confirm the runtime is still running, and use `/workspace` instead of a file-looking remote path.",
+          ],
+        };
+      }
+      if (detail.startsWith("docker_cp_download_failed:")) {
+        return {
+          status: "error",
+          title: "Container download failed",
+          detail,
+          lines: [
+            "The seller gateway could not copy the requested path out of the runtime container.",
+            "Check that the remote path exists inside the container before downloading.",
+          ],
+        };
+      }
+      if (detail === "runtime_session_not_active") {
+        return {
+          status: "error",
+          title: "Session is no longer active",
+          detail,
+          lines: [
+            "This runtime session has already stopped or expired.",
+            "Start a fresh session before retrying the action.",
+          ],
+        };
+      }
+      return {
+        status: "error",
+        title: "Buyer action failed",
+        detail: summarizeDetail(detail || error),
+        lines: [
+          "The raw response panel now contains the exact payload returned by the buyer server.",
+          "If this happened during upload, verify local_path, connection status, WireGuard, and the remote directory value.",
+        ],
+      };
+    }
+    function refreshGatewayNotice(notice = gatewayReadinessNotice()) {
+      renderNotice(
+        "gateway_notice",
+        notice,
+        "Select a session first, then this panel will explain whether upload and exec are ready.",
+      );
+    }
+    function handleBuyerError(title, error, action) {
+      setRaw(`${title} failed`, buildErrorPayload(error));
+      refreshGatewayNotice(buyerActionNotice(error, action));
+      return null;
+    }
     async function fetchJson(url, options = {}) {
       const response = await fetch(url, options);
-      const data = await response.json();
-      if (!response.ok) throw new Error(JSON.stringify(data));
+      const text = await response.text();
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { raw: text };
+      }
+      if (!response.ok) {
+        const error = new Error(String(data?.detail || data?.error || data?.raw || `HTTP ${response.status}`));
+        error.response = { status: response.status, data, url };
+        throw error;
+      }
       return data;
     }
     async function postJson(url, payload, title) {
@@ -575,6 +899,7 @@ print(6 * 7)</textarea>
       if (!session) {
         root.innerHTML = '<div class="empty">No active session selected yet.</div>';
         $("codex_selected_session").value = "";
+        refreshGatewayNotice();
         return;
       }
       $("codex_selected_session").value = session.local_id || "";
@@ -624,6 +949,7 @@ print(6 * 7)</textarea>
           </div>
         </div>
       `;
+      refreshGatewayNotice();
     }
     function renderCodexStatus(codex) {
       const root = $("codex_status");
@@ -694,30 +1020,40 @@ print(6 * 7)</textarea>
       setRaw("dashboard", data);
     }
     async function runCode() {
-      const data = await postJson("/api/runtime/run-code", {
-        backend_url: valueOf("backend_url"),
-        email: valueOf("email"),
-        password: valueOf("password"),
-        seller_node_key: valueOf("seller_node_key"),
-        runtime_image: valueOf("runtime_image"),
-        code_filename: valueOf("code_filename"),
-        code_content: valueOf("code_content"),
-        requested_duration_minutes: leaseMinutes(),
-      }, "run code");
-      state.currentLocalId = data.session.local_id;
-      await loadDashboard();
+      try {
+        const data = await postJson("/api/runtime/run-code", {
+          backend_url: valueOf("backend_url"),
+          email: valueOf("email"),
+          password: valueOf("password"),
+          display_name: valueOf("display_name"),
+          seller_node_key: valueOf("seller_node_key"),
+          runtime_image: valueOf("runtime_image"),
+          code_filename: valueOf("code_filename"),
+          code_content: valueOf("code_content"),
+          requested_duration_minutes: leaseMinutes(),
+        }, "run code");
+        state.currentLocalId = data.session.local_id;
+        await loadDashboard();
+      } catch (error) {
+        handleBuyerError("run code", error, "start");
+      }
     }
     async function startShell() {
-      const data = await postJson("/api/runtime/start-shell", {
-        backend_url: valueOf("backend_url"),
-        email: valueOf("email"),
-        password: valueOf("password"),
-        seller_node_key: valueOf("seller_node_key"),
-        runtime_image: valueOf("runtime_image"),
-        requested_duration_minutes: leaseMinutes(),
-      }, "start shell");
-      state.currentLocalId = data.session.local_id;
-      await loadDashboard();
+      try {
+        const data = await postJson("/api/runtime/start-shell", {
+          backend_url: valueOf("backend_url"),
+          email: valueOf("email"),
+          password: valueOf("password"),
+          display_name: valueOf("display_name"),
+          seller_node_key: valueOf("seller_node_key"),
+          runtime_image: valueOf("runtime_image"),
+          requested_duration_minutes: leaseMinutes(),
+        }, "start shell");
+        state.currentLocalId = data.session.local_id;
+        await loadDashboard();
+      } catch (error) {
+        handleBuyerError("start shell", error, "start");
+      }
     }
     async function startLicensedShell() {
       const licenseToken = valueOf("license_token").trim();
@@ -725,23 +1061,32 @@ print(6 * 7)</textarea>
         setRaw("licensed shell failed", { ok: false, error: "missing_license_token" });
         return;
       }
-      const data = await postJson("/api/runtime/start-licensed-shell", {
-        backend_url: valueOf("backend_url"),
-        email: valueOf("email"),
-        password: valueOf("password"),
-        license_token: licenseToken,
-      }, "start licensed shell");
-      state.currentLocalId = data.session.local_id;
-      await loadDashboard();
+      try {
+        const data = await postJson("/api/runtime/start-licensed-shell", {
+          backend_url: valueOf("backend_url"),
+          email: valueOf("email"),
+          password: valueOf("password"),
+          display_name: valueOf("display_name"),
+          license_token: licenseToken,
+        }, "start licensed shell");
+        state.currentLocalId = data.session.local_id;
+        await loadDashboard();
+      } catch (error) {
+        handleBuyerError("start licensed shell", error, "start");
+      }
     }
     async function connectSession(localId) {
-      const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(localId)}/connect`, {
-        activate_wireguard: true,
-      }, "connect session");
-      state.currentLocalId = localId;
-      await loadDashboard();
-      renderActive(activeSession());
-      return data;
+      try {
+        const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(localId)}/connect`, {
+          activate_wireguard: true,
+        }, "connect session");
+        state.currentLocalId = localId;
+        await loadDashboard();
+        renderActive(activeSession());
+        return data;
+      } catch (error) {
+        return handleBuyerError("connect session", error, "connect");
+      }
     }
     async function connectActiveSession() {
       if (!state.currentLocalId) return setRaw("connect failed", { ok: false, error: "no_active_session" });
@@ -749,48 +1094,68 @@ print(6 * 7)</textarea>
     }
     async function execActiveSession() {
       if (!state.currentLocalId) return setRaw("exec failed", { ok: false, error: "no_active_session" });
-      const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/exec`, {
-        command: valueOf("exec_command"),
-      }, "gateway exec");
-      $("logs_view").textContent = data.session.logs || "No logs available.";
-      await loadDashboard();
-      renderActive(activeSession());
-      return data;
+      try {
+        const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/exec`, {
+          command: valueOf("exec_command"),
+        }, "gateway exec");
+        $("logs_view").textContent = data.session.logs || "No logs available.";
+        await loadDashboard();
+        renderActive(activeSession());
+        return data;
+      } catch (error) {
+        return handleBuyerError("gateway exec", error, "exec");
+      }
     }
     async function uploadFiles() {
       if (!state.currentLocalId) return setRaw("upload failed", { ok: false, error: "no_active_session" });
-      const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/files/upload`, {
-        local_path: valueOf("upload_local_path"),
-        remote_path: valueOf("upload_remote_path") || "/workspace",
-      }, "gateway upload");
-      await loadDashboard();
-      renderActive(activeSession());
-      return data;
+      try {
+        const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/files/upload`, {
+          local_path: valueOf("upload_local_path"),
+          remote_path: valueOf("upload_remote_path") || "/workspace",
+        }, "gateway upload");
+        await loadDashboard();
+        renderActive(activeSession());
+        return data;
+      } catch (error) {
+        return handleBuyerError("gateway upload", error, "upload");
+      }
     }
     async function downloadFiles() {
       if (!state.currentLocalId) return setRaw("download failed", { ok: false, error: "no_active_session" });
-      const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/files/download`, {
-        remote_path: valueOf("download_remote_path"),
-        local_path: valueOf("download_local_path"),
-      }, "gateway download");
-      await loadDashboard();
-      renderActive(activeSession());
-      return data;
+      try {
+        const data = await postJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/files/download`, {
+          remote_path: valueOf("download_remote_path"),
+          local_path: valueOf("download_local_path"),
+        }, "gateway download");
+        await loadDashboard();
+        renderActive(activeSession());
+        return data;
+      } catch (error) {
+        return handleBuyerError("gateway download", error, "download");
+      }
     }
     async function loadLogs(tail = false) {
       if (!state.currentLocalId) return setRaw("logs failed", { ok: false, error: "no_active_session" });
-      const query = new URLSearchParams({ cursor: "0", limit: "200", tail: String(Boolean(tail)) });
-      const data = await fetchJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/logs?${query.toString()}`);
-      $("logs_view").textContent = data.log_result.logs || "No logs available.";
-      setRaw("gateway logs", data);
-      await loadDashboard();
+      try {
+        const query = new URLSearchParams({ cursor: "0", limit: "200", tail: String(Boolean(tail)) });
+        const data = await fetchJson(`/api/runtime/sessions/${encodeURIComponent(state.currentLocalId)}/logs?${query.toString()}`);
+        $("logs_view").textContent = data.log_result.logs || "No logs available.";
+        setRaw("gateway logs", data);
+        await loadDashboard();
+      } catch (error) {
+        handleBuyerError("gateway logs", error, "logs");
+      }
     }
     async function installHelper() {
-      const data = await postJson("/api/runtime/wireguard-helper/install", {
-        attempt_launch: true,
-      }, "wireguard helper install");
-      renderHelper(data.wireguard_helper);
-      await loadDashboard();
+      try {
+        const data = await postJson("/api/runtime/wireguard-helper/install", {
+          attempt_launch: true,
+        }, "wireguard helper install");
+        renderHelper(data.wireguard_helper);
+        await loadDashboard();
+      } catch (error) {
+        handleBuyerError("wireguard helper install", error, "connect");
+      }
     }
     function selectCodexJob(jobId) {
       state.currentCodexJobId = jobId;
@@ -934,6 +1299,10 @@ print(6 * 7)</textarea>
         state.terminal.writeln("\r\n[terminal closed]");
       };
     }
+
+    $("upload_remote_path").addEventListener("input", () => refreshGatewayNotice());
+    $("upload_local_path").addEventListener("input", () => refreshGatewayNotice());
+    refreshGatewayNotice();
 
     loadDashboard().catch((error) => {
       setRaw("init failed", { ok: false, error: String(error) });

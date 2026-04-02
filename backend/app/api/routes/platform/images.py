@@ -61,6 +61,11 @@ def report_uploaded_image(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Image reported, but auto-publish failed during pricing: {exc}",
         ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Image reported, but auto-publish failed unexpectedly: {exc}",
+        ) from exc
 
     return serialize_image(image)
 

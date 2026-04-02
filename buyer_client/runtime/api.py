@@ -7,6 +7,11 @@ import urllib.request
 from typing import Any, Callable
 
 
+def _buyer_display_name(display_name: str | None) -> str:
+    value = str(display_name or "").strip()
+    return value or "Buyer Agent"
+
+
 def request_json(
     method: str,
     url: str,
@@ -38,10 +43,11 @@ def request_json(
 
 
 def login_or_register(backend_url: str, email: str, password: str, display_name: str | None = None) -> dict[str, Any]:
+    resolved_display_name = _buyer_display_name(display_name)
     register = request_json(
         "POST",
         f"{backend_url.rstrip('/')}/api/v1/auth/register",
-        {"email": email, "password": password, "display_name": display_name},
+        {"email": email, "password": password, "display_name": resolved_display_name},
     )
     if not register["ok"] and register["status"] != 409:
         raise RuntimeError(f"register_failed: {register['data']}")
@@ -100,11 +106,24 @@ def start_order_runtime_session(
     return response["data"]
 
 
+def fetch_codex_runtime_bootstrap(*, backend_url: str, buyer_token: str) -> dict[str, Any]:
+    response = request_json(
+        "GET",
+        f"{backend_url.rstrip('/')}/api/v1/platform/runtime/codex",
+        token=buyer_token,
+        timeout=120,
+    )
+    if not response["ok"]:
+        raise RuntimeError(f"fetch_codex_runtime_bootstrap_failed: {response['data']}")
+    return response["data"]
+
+
 def create_runtime_session(
     *,
     backend_url: str,
     email: str,
     password: str,
+    display_name: str | None = None,
     seller_node_key: str = "",
     offer_id: int | None = None,
     code_filename: str,
@@ -120,7 +139,7 @@ def create_runtime_session(
     working_dir: str | None = None,
     run_command: list[str] | None = None,
 ) -> dict[str, Any]:
-    auth = login_or_register(backend_url, email, password, display_name="Buyer Agent")
+    auth = login_or_register(backend_url, email, password, display_name=display_name)
     buyer_token = auth["access_token"]
 
     create = request_json(
@@ -183,9 +202,10 @@ def start_licensed_shell_session(
     backend_url: str,
     email: str,
     password: str,
+    display_name: str | None = None,
     license_token: str,
 ) -> dict[str, Any]:
-    auth = login_or_register(backend_url, email, password, display_name="Buyer Agent")
+    auth = login_or_register(backend_url, email, password, display_name=display_name)
     buyer_token = auth["access_token"]
     license_info = redeem_order_license(
         backend_url=backend_url,
@@ -308,8 +328,15 @@ def renew_runtime_session(*, backend_url: str, buyer_token: str, session_id: int
     return response["data"]
 
 
-def stop_session(*, backend_url: str, email: str, password: str, session_id: int) -> dict[str, Any]:
-    auth = login_or_register(backend_url, email, password, display_name="Buyer Agent")
+def stop_session(
+    *,
+    backend_url: str,
+    email: str,
+    password: str,
+    session_id: int,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    auth = login_or_register(backend_url, email, password, display_name=display_name)
     return stop_runtime_session(
         backend_url=backend_url,
         buyer_token=auth["access_token"],

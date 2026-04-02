@@ -21,6 +21,7 @@ class UserResponse(BaseModel):
     email: str
     display_name: str | None
     seller_status: str
+    buyer_status: str
     created_at: datetime
 
 

@@ -54,7 +54,8 @@ uv run uvicorn app.main:app --reload
 }
 ```
 
-该目录已经在仓库 `.gitignore` 中忽略，不应提交到仓库。
+当前仓库配置已经允许提交根目录 `.env` 和 `backend/.codex/auth.json`，便于团队直接通过 Git 分发同一份后端 CodeX runtime 凭据。
+后端仍然只会向已登录客户端下发 runtime bootstrap，而 buyer 侧只会把该 key 注入本次启动的 `codex` 子进程，不会改写用户在系统其它位置手动启动的 Codex 环境。
 
 ## Tests
 

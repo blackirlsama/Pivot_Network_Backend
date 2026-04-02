@@ -14,11 +14,13 @@ router = APIRouter(prefix="/auth")
 
 def _serialize_user(user: User) -> UserResponse:
     seller_status = user.seller_profile.status if user.seller_profile is not None else "missing"
+    buyer_status = user.buyer_wallet.status if user.buyer_wallet is not None else "missing"
     return UserResponse(
         id=user.id,
         email=user.email,
         display_name=user.display_name,
         seller_status=seller_status,
+        buyer_status=buyer_status,
         created_at=user.created_at,
     )
 

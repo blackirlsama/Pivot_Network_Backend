@@ -59,6 +59,7 @@ def main() -> None:
     run_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     run_parser.add_argument("--email", required=True)
     run_parser.add_argument("--password", required=True)
+    run_parser.add_argument("--display-name", default="")
     run_parser.add_argument("--seller-node-key", required=True)
     run_parser.add_argument("--code", required=True)
     run_parser.add_argument("--runtime-image", default="python:3.12-alpine")
@@ -69,6 +70,7 @@ def main() -> None:
     archive_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     archive_parser.add_argument("--email", required=True)
     archive_parser.add_argument("--password", required=True)
+    archive_parser.add_argument("--display-name", default="")
     archive_parser.add_argument("--seller-node-key", required=True)
     archive_parser.add_argument("--source", required=True)
     archive_parser.add_argument("--runtime-image", default="python:3.12-alpine")
@@ -81,6 +83,7 @@ def main() -> None:
     github_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     github_parser.add_argument("--email", required=True)
     github_parser.add_argument("--password", required=True)
+    github_parser.add_argument("--display-name", default="")
     github_parser.add_argument("--seller-node-key", required=True)
     github_parser.add_argument("--repo-url", required=True)
     github_parser.add_argument("--ref", default="main")
@@ -94,6 +97,7 @@ def main() -> None:
     shell_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     shell_parser.add_argument("--email", required=True)
     shell_parser.add_argument("--password", required=True)
+    shell_parser.add_argument("--display-name", default="")
     shell_parser.add_argument("--seller-node-key", required=True)
     shell_parser.add_argument("--runtime-image", default="python:3.12-alpine")
     shell_parser.add_argument("--minutes", type=int, default=30)
@@ -106,12 +110,14 @@ def main() -> None:
     stop_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     stop_parser.add_argument("--email", required=True)
     stop_parser.add_argument("--password", required=True)
+    stop_parser.add_argument("--display-name", default="")
     stop_parser.add_argument("--session-id", required=True, type=int)
 
     renew_parser = subparsers.add_parser("renew", help="Extend a runtime session lease.")
     renew_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     renew_parser.add_argument("--email", required=True)
     renew_parser.add_argument("--password", required=True)
+    renew_parser.add_argument("--display-name", default="")
     renew_parser.add_argument("--session-id", required=True, type=int)
     renew_parser.add_argument("--minutes", type=int, default=30)
 
@@ -122,6 +128,7 @@ def main() -> None:
     wg_bootstrap_parser.add_argument("--backend-url", default="http://127.0.0.1:8000")
     wg_bootstrap_parser.add_argument("--email", required=True)
     wg_bootstrap_parser.add_argument("--password", required=True)
+    wg_bootstrap_parser.add_argument("--display-name", default="")
     wg_bootstrap_parser.add_argument("--session-id", required=True, type=int)
     wg_bootstrap_parser.add_argument("--state-dir", default="")
 
@@ -138,6 +145,7 @@ def main() -> None:
             backend_url=args.backend_url,
             email=args.email,
             password=args.password,
+            display_name=args.display_name or None,
             seller_node_key=args.seller_node_key,
             code_path=Path(args.code),
             runtime_image=args.runtime_image,
@@ -149,6 +157,7 @@ def main() -> None:
             backend_url=args.backend_url,
             email=args.email,
             password=args.password,
+            display_name=args.display_name or None,
             seller_node_key=args.seller_node_key,
             source_path=Path(args.source),
             runtime_image=args.runtime_image,
@@ -162,6 +171,7 @@ def main() -> None:
             backend_url=args.backend_url,
             email=args.email,
             password=args.password,
+            display_name=args.display_name or None,
             seller_node_key=args.seller_node_key,
             repo_url=args.repo_url,
             repo_ref=args.ref,
@@ -176,6 +186,7 @@ def main() -> None:
             backend_url=args.backend_url,
             email=args.email,
             password=args.password,
+            display_name=args.display_name or None,
             seller_node_key=args.seller_node_key,
             runtime_image=args.runtime_image,
             requested_duration_minutes=args.minutes,
@@ -188,9 +199,10 @@ def main() -> None:
             email=args.email,
             password=args.password,
             session_id=args.session_id,
+            display_name=args.display_name or None,
         )
     elif args.command == "renew":
-        auth = login_or_register(args.backend_url, args.email, args.password, display_name="Buyer Agent")
+        auth = login_or_register(args.backend_url, args.email, args.password, display_name=args.display_name or None)
         result = renew_runtime_session(
             backend_url=args.backend_url,
             buyer_token=auth["access_token"],
@@ -198,7 +210,7 @@ def main() -> None:
             additional_minutes=args.minutes,
         )
     elif args.command == "wireguard-bootstrap":
-        auth = login_or_register(args.backend_url, args.email, args.password, display_name="Buyer Agent")
+        auth = login_or_register(args.backend_url, args.email, args.password, display_name=args.display_name or None)
         result = bootstrap_runtime_session_wireguard(
             backend_url=args.backend_url,
             buyer_token=auth["access_token"],

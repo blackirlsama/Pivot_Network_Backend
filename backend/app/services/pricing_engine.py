@@ -32,6 +32,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def ensure_aware_utc(moment: datetime | None) -> datetime | None:
+    if moment is None:
+        return None
+    if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
 def truncate_to_hour(moment: datetime) -> datetime:
     return moment.replace(minute=0, second=0, microsecond=0)
 
@@ -322,11 +330,14 @@ def refresh_all_image_offer_prices(db: Session, now: datetime | None = None, rat
 
 
 def ensure_current_rate_card(db: Session, now: datetime | None = None) -> ResourceRateCard | None:
-    now = now or utcnow()
+    now = ensure_aware_utc(now or utcnow()) or utcnow()
     current = latest_resource_rate_card(db)
     if current is None:
         return refresh_resource_rate_card(db, now=now)
-    age = now - current.effective_hour
+    current_effective_hour = ensure_aware_utc(current.effective_hour)
+    if current_effective_hour is None:
+        return refresh_resource_rate_card(db, now=now)
+    age = now - current_effective_hour
     if age >= timedelta(seconds=settings.PRICING_REFRESH_INTERVAL_SECONDS):
         return refresh_resource_rate_card(db, now=now)
     return current

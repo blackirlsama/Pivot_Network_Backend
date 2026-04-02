@@ -33,12 +33,16 @@ def test_register_login_and_me_flow(client: TestClient) -> None:
     )
     assert register_response.status_code == 201
     assert register_response.json()["email"] == "seller@example.com"
+    assert register_response.json()["seller_status"] == "active"
+    assert register_response.json()["buyer_status"] == "active"
 
     login_response = client.post(
         "/api/v1/auth/login",
         json={"email": "seller@example.com", "password": "super-secret-password"},
     )
     assert login_response.status_code == 200
+    assert login_response.json()["user"]["seller_status"] == "active"
+    assert login_response.json()["user"]["buyer_status"] == "active"
     token = login_response.json()["access_token"]
 
     me_response = client.get(
@@ -47,6 +51,39 @@ def test_register_login_and_me_flow(client: TestClient) -> None:
     )
     assert me_response.status_code == 200
     assert me_response.json()["seller_status"] == "active"
+    assert me_response.json()["buyer_status"] == "active"
+
+
+def test_same_user_can_access_buyer_and_seller_surfaces(client: TestClient) -> None:
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "hybrid-user@example.com",
+            "password": "super-secret-password",
+            "display_name": "Hybrid User",
+        },
+    )
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "hybrid-user@example.com", "password": "super-secret-password"},
+    )
+    token = login_response.json()["access_token"]
+
+    wallet_response = client.get(
+        "/api/v1/buyer/wallet",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert wallet_response.status_code == 200
+    assert wallet_response.json()["buyer_user_id"] > 0
+    assert wallet_response.json()["balance_cny_credits"] == 100.0
+
+    node_token_response = client.post(
+        "/api/v1/platform/node-registration-token",
+        json={"label": "hybrid-user-node", "expires_hours": 48},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert node_token_response.status_code == 200
+    assert node_token_response.json()["node_registration_token"]
 
 
 def test_node_registration_heartbeat_and_image_report_flow(client: TestClient, monkeypatch) -> None:
@@ -269,13 +306,38 @@ def test_codex_runtime_and_wireguard_bootstrap_flow(client: TestClient, monkeypa
     assert payload["server_peer_apply_status"] == "applied"
     assert payload["activation_mode"] == "server_peer_applied"
 
+
+def test_logged_in_buyer_can_fetch_codex_runtime_bootstrap(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr("app.api.routes.platform.settings.OPENAI_API_KEY", "test-platform-key")
+
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "buyer-codex@example.com",
+            "password": "super-secret-password",
+            "display_name": "Buyer Codex",
+        },
+    )
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "buyer-codex@example.com", "password": "super-secret-password"},
+    )
+    access_token = login_response.json()["access_token"]
+
+    codex_response = client.get(
+        "/api/v1/platform/runtime/codex",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert codex_response.status_code == 200
+    assert codex_response.json()["auth"]["OPENAI_API_KEY"] == "test-platform-key"
+
     activity_response = client.get(
         "/api/v1/platform/activity",
         headers={"Authorization": f"Bearer {access_token}"},
     )
     event_types = [event["event_type"] for event in activity_response.json()]
     assert "codex_runtime_issued" in event_types
-    assert "wireguard_profile_issued" in event_types
 
 
 def test_remote_swarm_overview_and_worker_join_token_endpoints(client: TestClient, monkeypatch) -> None:

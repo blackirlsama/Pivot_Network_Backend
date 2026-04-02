@@ -1,4 +1,3 @@
-.env
 .cache/
 .codex_tmp/
 .pytest_cache/
@@ -13,7 +12,10 @@ __pycache__/
 .cccc/
 CCCC/runtime/
 .codex/
-backend/.codex/
+!backend/.codex/
+backend/.codex/*
+!backend/.codex/auth.json
+!backend/.codex/REAL_RUNTIME_CONFIG.md
 *.sqlite
 *.sqlite3
 *.sqlite3-*
