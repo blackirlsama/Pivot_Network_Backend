@@ -13,6 +13,18 @@ class SwarmManagerError(RuntimeError):
     pass
 
 
+def _task_failure_detail(task: dict[str, object]) -> str:
+    state = str(task.get("CurrentState") or "").strip()
+    error = str(task.get("Error") or "").strip()
+    if state and error:
+        return f"{state} | {error}"
+    if state:
+        return state
+    if error:
+        return error
+    return "task failure with no state detail"
+
+
 def _ssh_client(settings: Settings) -> paramiko.SSHClient:
     host = settings.WIREGUARD_SERVER_SSH_HOST
     port = settings.WIREGUARD_SERVER_SSH_PORT
@@ -477,7 +489,9 @@ def validate_runtime_image_on_node(
                         if "Complete" in last or "Running" in last:
                             break
                         if "Failed" in last or "Rejected" in last:
-                            raise RuntimeError(last)
+                            error = (current.get("Error") or "").strip()
+                            detail = f"{last} | {error}" if error else last
+                            raise RuntimeError(detail)
                     time.sleep(2)
                 logs = subprocess.run(
                     ["docker", "service", "logs", name, "--raw", "--no-task-ids", "--tail", "20"],
@@ -609,7 +623,9 @@ def probe_node_capabilities_on_node(
                         if "Complete" in last:
                             break
                         if "Failed" in last or "Rejected" in last:
-                            raise RuntimeError(last)
+                            error = (current.get("Error") or "").strip()
+                            detail = f"{last} | {error}" if error else last
+                            raise RuntimeError(detail)
                     time.sleep(2)
                 logs = subprocess.run(
                     ["docker", "service", "logs", name, "--raw", "--no-task-ids", "--tail", "40"],
@@ -665,6 +681,7 @@ def inspect_swarm_service(settings: Settings, *, service_name: str) -> dict[str,
         return {
             "tasks": tasks,
             "current_task": current,
+            "current_task_error_detail": _task_failure_detail(current) if current else "",
             "logs": str(logs_result["stdout"]) if logs_result["ok"] else "",
         }
     finally:

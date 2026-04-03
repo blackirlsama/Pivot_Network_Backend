@@ -403,8 +403,16 @@ def _run_windows_wireguard_helper(
         "requested_at": _utc_now_iso(),
     }
     request_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    cleanup_warning: dict[str, Any] | None = None
     if result_path.exists():
-        result_path.unlink()
+        try:
+            result_path.unlink()
+        except OSError as exc:
+            cleanup_warning = {
+                "warning": "wireguard_helper_result_cleanup_failed",
+                "result_path": str(result_path),
+                "error": str(exc),
+            }
 
     run_result = _run_command(wireguard_helper_run_task_command())
     if not run_result["ok"]:
@@ -415,11 +423,14 @@ def _run_windows_wireguard_helper(
         if result_path.exists():
             try:
                 result = json.loads(result_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, OSError):
                 time.sleep(1)
                 continue
             if result.get("request_id") == request_id:
-                return {"ok": bool(result.get("ok")), "helper_result": result, "run_result": run_result}
+                response = {"ok": bool(result.get("ok")), "helper_result": result, "run_result": run_result}
+                if cleanup_warning:
+                    response["cleanup_warning"] = cleanup_warning
+                return response
         time.sleep(1)
 
     return {
@@ -429,6 +440,7 @@ def _run_windows_wireguard_helper(
         "request_path": str(request_path),
         "result_path": str(result_path),
         "run_result": run_result,
+        "cleanup_warning": cleanup_warning,
     }
 
 
@@ -529,8 +541,11 @@ def host_summary() -> dict[str, Any]:
             )
         interfaces[interface_name] = interface_rows
 
-    disk_root = Path.cwd().anchor or str(Path.cwd())
-    disk_usage = psutil.disk_usage(disk_root)
+    disk_path = str(Path.cwd())
+    try:
+        disk_usage = psutil.disk_usage(disk_path)
+    except Exception:
+        disk_usage = shutil.disk_usage(disk_path)
     memory = psutil.virtual_memory()
 
     return {

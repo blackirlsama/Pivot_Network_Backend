@@ -35,7 +35,8 @@
           </label>
           <label>
             密码
-            <input id="password" type="password" value="super-secret-password" />
+            <input id="password" type="password" value="super-secret-password" minlength="8" autocomplete="new-password" />
+            <span class="field-note">注册密码至少 8 位。</span>
           </label>
           <label>
             显示名
@@ -47,6 +48,7 @@
           <button id="login_btn" class="secondary">登录</button>
           <button id="refresh_btn" class="secondary">刷新数据</button>
         </div>
+        <div id="auth_feedback" class="feedback" aria-live="polite">注册时密码至少 8 位。</div>
         <div id="auth_status" class="muted">未登录</div>
       </section>
 

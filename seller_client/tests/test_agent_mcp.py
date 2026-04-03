@@ -1,10 +1,12 @@
 import json
+from collections import namedtuple
 from pathlib import Path
 
 from seller_client.agent_mcp import (
     _build_remote_image_ref,
     _config_path,
     _normalize_registry_reference,
+    _run_windows_wireguard_helper,
     _registry_base_url,
     _wireguard_config_path,
     bootstrap_wireguard_from_platform,
@@ -17,6 +19,7 @@ from seller_client.agent_mcp import (
     fetch_codex_runtime_bootstrap,
     fetch_swarm_worker_join_token,
     get_client_config,
+    host_summary,
     ping,
     prepare_wireguard_profile,
     push_image,
@@ -38,6 +41,86 @@ def test_environment_check_includes_expected_keys() -> None:
     assert "docker_cli" in response
     assert "python" in response
     assert "current_workdir" in response
+
+
+def test_host_summary_falls_back_to_shutil_disk_usage(monkeypatch) -> None:
+    virtual_memory_type = namedtuple("VirtualMemory", ["total", "available"])
+    disk_usage_type = namedtuple("DiskUsage", ["total", "used", "free"])
+
+    monkeypatch.setattr("seller_client.agent_mcp.psutil.boot_time", lambda: 123.0)
+    monkeypatch.setattr("seller_client.agent_mcp.psutil.net_if_addrs", lambda: {})
+    monkeypatch.setattr(
+        "seller_client.agent_mcp.psutil.virtual_memory",
+        lambda: virtual_memory_type(total=16 * 1024 * 1024 * 1024, available=6 * 1024 * 1024 * 1024),
+    )
+    monkeypatch.setattr("seller_client.agent_mcp.psutil.cpu_count", lambda logical=True: 8 if logical else 4)
+    monkeypatch.setattr(
+        "seller_client.agent_mcp.psutil.disk_usage",
+        lambda path: (_ for _ in ()).throw(SystemError("argument 1 (impossible<bad format char>)")),
+    )
+    monkeypatch.setattr(
+        "seller_client.agent_mcp.shutil.disk_usage",
+        lambda path: disk_usage_type(
+            total=500 * 1024 * 1024 * 1024,
+            used=200 * 1024 * 1024 * 1024,
+            free=300 * 1024 * 1024 * 1024,
+        ),
+    )
+
+    response = host_summary()
+
+    assert response["disk_total_gb"] == 500.0
+    assert response["disk_free_gb"] == 300.0
+
+
+def test_windows_wireguard_helper_tolerates_result_cleanup_permission_error(tmp_path: Path, monkeypatch) -> None:
+    request_path = tmp_path / "request.json"
+    result_file = tmp_path / "result.json"
+
+    class StubResultPath:
+        def __init__(self, path: Path) -> None:
+            self._path = path
+            self.parent = path.parent
+
+        def exists(self) -> bool:
+            return self._path.exists()
+
+        def unlink(self) -> None:
+            raise PermissionError("[WinError 5] Access is denied")
+
+        def read_text(self, encoding: str = "utf-8") -> str:
+            return self._path.read_text(encoding=encoding)
+
+        def __str__(self) -> str:
+            return str(self._path)
+
+    class StubUuid:
+        hex = "req-123"
+
+    result_file.write_text(
+        json.dumps({"ok": True, "request_id": "req-123", "action": "install_tunnel_service"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("seller_client.agent_mcp.is_windows_platform", lambda: True)
+    monkeypatch.setattr("seller_client.agent_mcp._windows_wireguard_helper_installed", lambda: True)
+    monkeypatch.setattr("seller_client.agent_mcp.wireguard_helper_request_path", lambda: request_path)
+    monkeypatch.setattr("seller_client.agent_mcp.wireguard_helper_result_path", lambda: StubResultPath(result_file))
+    monkeypatch.setattr("seller_client.agent_mcp.wireguard_helper_run_task_command", lambda: ["schtasks", "/Run"])
+    monkeypatch.setattr("seller_client.agent_mcp._run_command", lambda command: {"ok": True, "command": command})
+    monkeypatch.setattr("seller_client.agent_mcp.uuid.uuid4", lambda: StubUuid())
+
+    response = _run_windows_wireguard_helper(
+        action="install_tunnel_service",
+        config_path="C:\\temp\\wg.conf",
+        interface_name="wg-seller",
+        wireguard_exe="C:\\Program Files\\WireGuard\\wireguard.exe",
+        timeout_seconds=1,
+    )
+
+    assert response["ok"] is True
+    assert response["helper_result"]["request_id"] == "req-123"
+    assert response["cleanup_warning"]["warning"] == "wireguard_helper_result_cleanup_failed"
 
 
 def test_configure_environment_writes_client_config(tmp_path: Path) -> None:

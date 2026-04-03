@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from app.services.swarm_manager import SwarmManagerError
 
 
 def _fake_bundle_create(_settings, **_kwargs):
@@ -305,6 +306,82 @@ def test_codex_runtime_and_wireguard_bootstrap_flow(client: TestClient, monkeypa
     assert payload["server_peer_apply_required"] is False
     assert payload["server_peer_apply_status"] == "applied"
     assert payload["activation_mode"] == "server_peer_applied"
+
+
+def test_image_report_persists_image_when_auto_publish_probe_fails(client: TestClient, monkeypatch) -> None:
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "seller-probe-fail@example.com",
+            "password": "super-secret-password",
+            "display_name": "Seller Probe Fail",
+        },
+    )
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "seller-probe-fail@example.com", "password": "super-secret-password"},
+    )
+    access_token = login_response.json()["access_token"]
+
+    token_response = client.post(
+        "/api/v1/platform/node-registration-token",
+        json={"label": "probe-fail-node", "expires_hours": 48},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    node_token = token_response.json()["node_registration_token"]
+
+    register_response = client.post(
+        "/api/v1/platform/nodes/register",
+        json={
+            "node_id": "probe-fail-node-001",
+            "device_fingerprint": "device-probe-fail-001",
+            "hostname": "docker-desktop",
+            "system": "Windows",
+            "machine": "AMD64",
+            "shared_percent_preference": 10,
+            "capabilities": {"cpu_count_logical": 24, "memory_total_mb": 32000},
+            "seller_intent": "probe fail test",
+            "docker_status": "ready",
+            "swarm_state": "state=active node_id=probe0001",
+            "node_class": "cpu-basic",
+        },
+        headers={"Authorization": f"Bearer {node_token}"},
+    )
+    assert register_response.status_code == 200
+
+    def fail_probe(db, **kwargs):
+        raise SwarmManagerError(
+            "probe_node_capabilities_on_node_failed: "
+            "Rejected 2 seconds ago | No such image: python:3.12-alpine"
+        )
+
+    monkeypatch.setattr("app.api.routes.platform.run_offer_probe_and_pricing", fail_probe)
+
+    image_response = client.post(
+        "/api/v1/platform/images/report",
+        json={
+            "node_id": "probe-fail-node-001",
+            "repository": "seller/probe-demo",
+            "tag": "v1",
+            "digest": "sha256:probe-fail",
+            "registry": "pivotcompute.store",
+            "source_image": "continuumio/miniconda3",
+            "status": "uploaded",
+        },
+        headers={"Authorization": f"Bearer {node_token}"},
+    )
+
+    assert image_response.status_code == 502
+    assert "Rejected 2 seconds ago" in image_response.json()["detail"]
+    assert "No such image: python:3.12-alpine" in image_response.json()["detail"]
+
+    images_response = client.get(
+        "/api/v1/platform/images",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert images_response.status_code == 200
+    assert len(images_response.json()) == 1
+    assert images_response.json()[0]["repository"] == "seller/probe-demo"
 
 
 def test_logged_in_buyer_can_fetch_codex_runtime_bootstrap(client: TestClient, monkeypatch) -> None:

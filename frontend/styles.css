@@ -71,6 +71,11 @@ label {
   color: var(--muted);
 }
 
+.field-note {
+  font-size: 12px;
+  color: var(--warn);
+}
+
 input {
   width: 100%;
   padding: 10px 12px;
@@ -86,6 +91,28 @@ input {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
+}
+
+.feedback {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff7ec;
+  color: var(--warn);
+  border: 1px solid #efd8ba;
+  font-size: 13px;
+}
+
+.feedback.info {
+  background: #eef6ff;
+  color: var(--accent-2);
+  border-color: #c9dbf2;
+}
+
+.feedback.error {
+  background: #fff1f1;
+  color: #a03d3d;
+  border-color: #edc5c5;
 }
 
 button {

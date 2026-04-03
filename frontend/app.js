@@ -26,6 +26,12 @@ function setDebug(title, payload) {
   document.getElementById("debug_output").textContent = `=== ${title} ===\n${JSON.stringify(payload, null, 2)}`;
 }
 
+function setAuthFeedback(message, level = "") {
+  const node = document.getElementById("auth_feedback");
+  node.textContent = message;
+  node.className = level ? `feedback ${level}` : "feedback";
+}
+
 async function fetchJson(path, options = {}) {
   const response = await fetch(apiUrl(path), options);
   const data = await response.json();
@@ -161,15 +167,31 @@ function renderLedger(entries) {
 }
 
 async function register() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  const displayName = document.getElementById("display_name").value.trim() || null;
+
+  if (!email) {
+    setAuthFeedback("请输入邮箱。", "error");
+    setDebug("register validation failed", { ok: false, error: "missing_email" });
+    return;
+  }
+  if (password.length < 8) {
+    setAuthFeedback("注册失败：密码至少 8 位。", "error");
+    setDebug("register validation failed", { ok: false, error: "password_too_short", min_length: 8 });
+    return;
+  }
+
   const payload = await fetchJson("/api/v1/auth/register", {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
-      email: document.getElementById("email").value.trim(),
-      password: document.getElementById("password").value,
-      display_name: document.getElementById("display_name").value.trim() || null,
+      email,
+      password,
+      display_name: displayName,
     }),
   });
+  setAuthFeedback("注册成功，现在可以直接登录。", "info");
   setDebug("register", payload);
 }
 
@@ -187,6 +209,7 @@ async function login() {
   localStorage.setItem("pivot_platform_token", state.token);
   localStorage.setItem("pivot_platform_user", JSON.stringify(state.user));
   renderAuth();
+  setAuthFeedback("登录成功。", "info");
   setDebug("login", payload);
   await refreshAll();
 }
@@ -207,6 +230,7 @@ function logout() {
   renderLedger([]);
   document.getElementById("order_result").className = "detail empty";
   document.getElementById("order_result").textContent = "订单和许可证结果会显示在这里";
+  setAuthFeedback("注册时密码至少 8 位。");
 }
 
 async function refreshAll() {

@@ -964,7 +964,7 @@
           lines.push("Registry rejected the push. Check the repository name and the seller's permission or login state.");
         } else if (/tls|certificate|x509/i.test(pushText)) {
           lines.push("Registry TLS or certificate trust failed. Run the registry check first and verify `/v2/` is reachable.");
-        } else if (/connection refused|timed out|i\\/o timeout|no such host/i.test(pushText)) {
+        } else if (/connection refused|timed out|i\/o timeout|no such host/i.test(pushText)) {
           lines.push("The seller machine could not reach the registry endpoint. Check DNS, port, and current network access.");
         } else {
           lines.push("Docker push failed before the backend report step. Check the raw Docker output below.");
